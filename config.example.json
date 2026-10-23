@@ -1,0 +1,15 @@
+{
+    "enabled": true,
+    "mode": "daemon",
+    "title": "Hermes ✅",
+    "sound": true,
+    "preview_length": 80,
+    "min_response_length": 10,
+    "notify_platforms": ["tui", "cli", "terminal", ""],
+    "enable_reply": true,
+    "inject_reply": true,
+    "enable_approval": true,
+    "spool_dir": "",
+    "http_port": 9117,
+    "reply_poll_ms": 1000
+}

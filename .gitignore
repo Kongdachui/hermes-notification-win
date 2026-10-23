@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.bak-*
+config.json
+.venv/
+venv/
+spool/
+turns/

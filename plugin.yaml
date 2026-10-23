@@ -1,0 +1,17 @@
+name: hermes-notification-win
+version: "2.0.0"
+manifest_version: 1
+api_version: 1
+description: >
+  Windows/WSL 回复完成通知，带输入框可回复。Hermes 在 WSL 里跑，一轮回复结束
+  后由 Windows 侧常驻守护进程（win11toast）弹出带文本框的 toast：用户直接在通知
+  里打字，内容经 spool/inbox 回传并注入当前会话；点通知正文打开本轮回复的完整
+  页面（127.0.0.1:9117），页面底部也能回复。守护进程未运行时自动回落到
+  powershell.exe 的纯展示 toast。
+author: Kongdachui
+license: MIT
+homepage: https://github.com/Kongdachui/hermes-notification-win
+requires_hermes: ">=0.21"
+tags: [notifications, windows, wsl, desktop, reply]
+provides_hooks:
+  - post_llm_call
