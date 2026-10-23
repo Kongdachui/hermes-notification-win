@@ -13,12 +13,14 @@ spool/inbox，由 WSL 侧的 Hermes 插件注入到会话。
 """
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import sys
 import threading
 import time
 import traceback
+from ctypes import wintypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -50,6 +52,124 @@ def log(msg: str) -> None:
                 f.write(line)
     except Exception:
         pass
+
+
+# --------------------------------------------------------------- 终端窗口聚焦
+# 全部用 ctypes 调 user32/kernel32，不引 pywin32（守护进程 venv 只装 win11toast）。
+_TERM_EXES = {
+    "windowsterminal.exe", "conhost.exe", "openconsole.exe",
+    "cmd.exe", "powershell.exe", "pwsh.exe", "mintty.exe", "wt.exe",
+}
+_user32 = ctypes.WinDLL("user32", use_last_error=True)
+_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+
+def _process_name(pid: int) -> str:
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    h = _kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not h:
+        return ""
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        size = wintypes.DWORD(1024)
+        if _kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+            return Path(buf.value).name.lower()
+        return ""
+    except Exception:
+        return ""
+    finally:
+        _kernel32.CloseHandle(h)
+
+
+def list_windows() -> list[tuple[int, int, str]]:
+    out: list[tuple[int, int, str]] = []
+
+    def cb(hwnd, lparam):
+        try:
+            if _user32.IsWindowVisible(hwnd):
+                n = _user32.GetWindowTextLengthW(hwnd)
+                if n:
+                    buf = ctypes.create_unicode_buffer(n + 1)
+                    _user32.GetWindowTextW(hwnd, buf, n + 1)
+                    title = buf.value.strip()
+                    if title:
+                        pid = wintypes.DWORD()
+                        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                        out.append((int(hwnd), pid.value, title))
+        except Exception:
+            pass
+        return True
+
+    _user32.EnumWindows(_WNDENUMPROC(cb), 0)
+    return out
+
+
+def find_terminal_window(model: str = "") -> int:
+    """按标题特征找 Hermes 的终端窗口。
+
+    TUI 标题形如 `✓ 会话名 · deepseek-v4.1-flash · ~`，模型名是稳定特征；
+    多个同模型窗口时取第一个（Windows Terminal 多标签页只暴露当前标签的标题）。
+    """
+    model = (model or "").strip()
+    best, best_score = 0, 0
+    for hwnd, pid, title in list_windows():
+        if _process_name(pid) not in _TERM_EXES:
+            continue
+        score = 0
+        if model and model in title:
+            score += 50
+        if "·" in title:
+            score += 30
+        if "hermes" in title.lower():
+            score += 20
+        if score > best_score:
+            best, best_score = hwnd, score
+    return best if best_score >= 30 else 0
+
+
+def focus_window(hwnd: int) -> bool:
+    """把窗口提到前台 + 任务栏闪烁。后台进程直接 SetForegroundWindow 会被拦，
+    所以用 AttachThreadInput 把输入队列挂到前台线程上。
+
+    注意：SW_RESTORE 对最大化窗口会把它还原成普通尺寸（用户实测踩过），
+    所以只在窗口最小化时才 RESTORE，其余一律 SW_SHOW，不动大小。
+    """
+    if not hwnd or not _user32.IsWindow(hwnd):
+        return False
+    SW_SHOW = 5
+    SW_RESTORE = 9
+    _user32.ShowWindow(hwnd, SW_RESTORE if _user32.IsIconic(hwnd) else SW_SHOW)
+    fg = _user32.GetForegroundWindow()
+    cur_tid = _kernel32.GetCurrentThreadId()
+    tgt_tid = _user32.GetWindowThreadProcessId(hwnd, None)
+    fg_tid = _user32.GetWindowThreadProcessId(fg, None) if fg else 0
+    attached = []
+    for tid in {tgt_tid, fg_tid}:
+        if tid and tid != cur_tid:
+            try:
+                if _user32.AttachThreadInput(cur_tid, tid, True):
+                    attached.append(tid)
+            except Exception:
+                pass
+    try:
+        _user32.BringWindowToTop(hwnd)
+        ok = bool(_user32.SetForegroundWindow(hwnd))
+        _user32.FlashWindow(hwnd, True)
+    finally:
+        for tid in attached:
+            try:
+                _user32.AttachThreadInput(cur_tid, tid, False)
+            except Exception:
+                pass
+    return ok
+
+
+def focus_terminal(model: str = "") -> bool:
+    hwnd = find_terminal_window(model)
+    ok = focus_window(hwnd) if hwnd else False
+    log(f"focus terminal: model={model or '-'} hwnd={hwnd or 0} ok={ok}")
+    return ok
 
 
 def ensure_dirs() -> None:
@@ -110,6 +230,9 @@ def show_toast(job: dict) -> None:
     else:
         kwargs["input"] = "reply"
         kwargs["button"] = "发送"
+        if job.get("focus_button", True):
+            # 与「发送」并存：正文点击仍是打开全文页，这个按钮负责切回终端
+            kwargs["buttons"] = [str(job.get("focus_label") or "聚焦终端")]
     if not sound:
         kwargs["audio"] = {"silent": "true"}
     note = notify(**kwargs)
@@ -123,6 +246,11 @@ def show_toast(job: dict) -> None:
                 label = raw.split(":", 1)[1] if ":" in raw else raw
                 write_inbox(job, "reply", label.strip())
             else:
+                label = str(data.get("arguments") or "")
+                label = label.split(":", 1)[1] if ":" in label else label
+                if "聚焦" in label:
+                    focus_terminal(str(job.get("model") or ""))
+                    return  # 纯 Windows 侧动作，不回传给 WSL
                 text = ((data.get("user_input") or {}).get("reply") or "").strip()
                 write_inbox(job, "reply" if text else "empty", text)
         except Exception:

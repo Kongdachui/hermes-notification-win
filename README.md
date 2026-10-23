@@ -9,7 +9,7 @@ Hermes Agent 的 Windows 通知插件（WSL 跑 Hermes，通知弹在 Windows �
 
 | 能力 | 说明 |
 |---|---|
-| **完成通知 + 就地回复** | 一轮回复结束后弹横幅：标题 + 80 字预览 + 输入框。打字点「发送」，内容作为用户消息注入当前会话，Hermes 接着干 |
+| **完成通知 + 就地回复** | 一轮回复结束后弹横幅：标题 + 80 字预览 + 输入框。打字点「发送」，内容作为用户消息注入当前会话，Hermes 接着干。另有「聚焦终端」按钮，把跑 Hermes 的终端窗口提到前台（不动窗口大小/最大化状态） |
 | **点开看全文** | 点横幅正文 → 浏览器打开这一轮的完整回复（本地 `127.0.0.1:9117`），**Markdown 渲染**（标题/表格/代码块/引用/列表/链接），页面底部也能回复 |
 | **审批按钮** | 危险命令不再只在终端里问：横幅上直接给「允许一次 / 允许本会话 / 永远允许 / 拒绝」 |
 
@@ -90,6 +90,7 @@ print(reload_gateway_plugins(Path.home()/'.hermes'))"
 | `enable_reply` | `true` | 横幅带输入框 + 起回复轮询线程 |
 | `inject_reply` | `true` | 把收到的回复注入会话 |
 | `enable_approval` | `true` | 注册审批传输 `win-toast` |
+| `focus_button` | `true` | 完成通知里加「聚焦终端」按钮（点击把终端提到前台 + 任务栏闪烁） |
 | `spool_dir` | `""` | 留空 = `%LOCALAPPDATA%\HermesNotify\spool` |
 | `http_port` | `9117` | 回执页面的本地端口 |
 
@@ -103,6 +104,8 @@ print(reload_gateway_plugins(Path.home()/'.hermes'))"
 ## 已知限制
 
 - 通知来源显示为「Python」（借的是 win11toast 默认 AUMID）。想显示「Hermes」要注册自己的开始菜单快捷方式 + AUMID，暂未做
+- **聚焦终端靠窗口标题里的模型名匹配**（TUI 标题形如 `✓ 会话名 · deepseek-v4.1-flash · ~`）。多个同模型窗口时取第一个；Windows Terminal 多标签页只暴露当前标签的标题，所以只能聚焦窗口、不能保证切到对应标签
+- 聚焦只在窗口最小化时才 `SW_RESTORE`，其余用 `SW_SHOW`——`SW_RESTORE` 会把最大化的窗口还原成普通尺寸（踩过）
 - 守护进程靠 Windows 登录态自启；没登录/没跑时会自动回落到纯展示的 powershell toast
 - 插件里用了一处 Hermes 私有接口 `hermes_cli.plugin_session.session_key()` 来拿会话 key（`ctx.*` 没有公开等价物），已包在 try/except 里，Hermes 升级后若改名会退化为「不注入」而不是崩
 - 只在 Windows + WSL 环境验证过

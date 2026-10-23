@@ -66,6 +66,7 @@ DEFAULTS = {
     "enable_reply": True,
     "inject_reply": True,
     "enable_approval": True,
+    "focus_button": True,
     "spool_dir": "",
     "http_port": 9117,
     "reply_poll_ms": 1000,
@@ -710,6 +711,7 @@ def _on_post_llm_call(
             "session_id": session_id or "",
             "model": model,
             "sound": sound,
+            "focus_button": bool(cfg.get("focus_button", True)),
             "ts": time.time(),
         }
         if not _enqueue_job(cfg, job):
