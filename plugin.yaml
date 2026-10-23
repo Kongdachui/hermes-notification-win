@@ -1,5 +1,5 @@
 name: hermes-notification-win
-version: "2.1.0"
+version: "2.2.0"
 manifest_version: 1
 api_version: 1
 description: >
@@ -8,9 +8,9 @@ description: >
   里打字，内容经 spool/inbox 回传并注入当前会话；点通知正文打开本轮回复的完整
   页面（127.0.0.1:9117），页面底部也能回复。守护进程未运行时自动回落到
   powershell.exe 的纯展示 toast。
-author: Kongdachui
+author: kongchuike
 license: MIT
-homepage: https://github.com/Kongdachui/hermes-notification-win
+homepage: https://github.com/itgoyo/hermes-notification
 requires_hermes: ">=0.21"
 tags: [notifications, windows, wsl, desktop, reply]
 provides_hooks:

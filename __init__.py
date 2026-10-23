@@ -42,6 +42,7 @@ import html
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -311,6 +312,52 @@ def _write_atomic(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
+_RENDER_TRIED = False
+_RENDER_FN = None
+
+
+def _markdown_renderer():
+    """挑一个可用的 markdown 渲染器：markdown-it-py → python-markdown → None。
+
+    Hermes 的 venv 里 markdown-it-py（rich 的依赖）几乎一定在，所以通常零额外依赖。
+    两个都没有时退回纯文本 <pre>，功能不中断。
+    """
+    global _RENDER_TRIED, _RENDER_FN
+    if _RENDER_TRIED:
+        return _RENDER_FN
+    _RENDER_TRIED = True
+    try:
+        from markdown_it import MarkdownIt
+
+        md = MarkdownIt("commonmark", {"html": False, "linkify": False}).enable(["table", "strikethrough"])
+        md.render("**x**")  # 冒烟
+        _RENDER_FN = md.render
+        return _RENDER_FN
+    except Exception:
+        pass
+    try:
+        import markdown as _pm
+
+        conv = _pm.Markdown(extensions=["fenced_code", "tables", "sane_lists"]).convert
+        conv("**x**")
+        _RENDER_FN = conv
+        return _RENDER_FN
+    except Exception:
+        _RENDER_FN = None
+    return _RENDER_FN
+
+
+def _render_markdown(text: str) -> str:
+    fn = _markdown_renderer()
+    if fn is None:
+        return '<pre class="plain">' + html.escape(text) + "</pre>"
+    try:
+        return fn(text)
+    except Exception as e:
+        logger.warning("hermes-notification-win: markdown render failed: %s", e)
+        return '<pre class="plain">' + html.escape(text) + "</pre>"
+
+
 _TURN_HTML = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Hermes 回复</title><style>
@@ -319,7 +366,28 @@ body{background:#0b0b0d;color:#e8e8ea;font:15px/1.65 -apple-system,"Segoe UI",sy
 .wrap{max-width:820px;margin:0 auto}
 .meta{font-size:13px;color:#8e8e93;margin-bottom:6px}
 h1{font-size:17px;font-weight:600;margin:0 0 18px;color:#f2f2f7}
-pre{white-space:pre-wrap;word-break:break-word;background:#151517;border:1px solid #26262a;border-radius:14px;padding:20px;font:14px/1.75 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0}
+.md{word-break:break-word}
+.md h1,.md h2,.md h3,.md h4{margin:1.5em 0 .55em;font-weight:600;color:#f2f2f7;line-height:1.3}
+.md h1{font-size:21px}.md h2{font-size:17.5px}.md h3{font-size:15.5px}.md h4{font-size:14.5px;color:#c7c7cc}
+.md>:first-child{margin-top:0}
+.md p{margin:.75em 0}
+.md a{color:#0a84ff;text-decoration:none}
+.md a:hover{text-decoration:underline}
+.md strong{color:#fff}
+.md code{background:#1c1c1f;border:1px solid #2a2a2e;border-radius:6px;padding:1px 5px;font:13.5px ui-monospace,SFMono-Regular,Menlo,monospace;color:#e8e8ea}
+.md pre{background:#151517;border:1px solid #26262a;border-radius:12px;padding:16px 18px;overflow-x:auto;margin:1em 0}
+.md pre code{background:none;border:0;padding:0;font-size:13.5px;line-height:1.6;white-space:pre}
+.md ul,.md ol{padding-left:1.5em;margin:.75em 0}
+.md li{margin:.3em 0}
+.md li>p{margin:.2em 0}
+.md blockquote{margin:1em 0;padding:.1em 0 .1em 14px;border-left:3px solid #3a3a3f;color:#b0b0b6}
+.md table{border-collapse:collapse;margin:1em 0;font-size:14px;display:block;overflow-x:auto;max-width:100%}
+.md th,.md td{border:1px solid #2a2a2e;padding:7px 11px;text-align:left}
+.md th{background:#17171a;font-weight:600;color:#f2f2f7}
+.md hr{border:0;border-top:1px solid #2a2a2e;margin:1.8em 0}
+.md img{max-width:100%;border-radius:8px}
+.md input[type=checkbox]{margin-right:6px}
+pre.plain{white-space:pre-wrap;word-break:break-word;background:#151517;border:1px solid #26262a;border-radius:14px;padding:20px;font:14px/1.75 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0}
 textarea{width:100%;box-sizing:border-box;margin-top:20px;background:#151517;color:#e8e8ea;border:1px solid #2c2c31;border-radius:12px;padding:14px;font:14px/1.6 inherit;resize:vertical;min-height:88px}
 textarea:focus{outline:none;border-color:#0a84ff}
 .row{display:flex;align-items:center;gap:12px;margin-top:12px;flex-wrap:wrap}
@@ -331,7 +399,7 @@ button:disabled{opacity:.45;cursor:default}
 </style></head><body><div class="wrap">
 <div class="meta">__WHEN__ · __MODEL__</div>
 <h1>Hermes 回复全文</h1>
-<pre>__BODY__</pre>
+<div class="md">__BODY__</div>
 <textarea id="reply" placeholder="在这里回复，Ctrl/Cmd+Enter 发送…"></textarea>
 <div class="row"><button id="send">发送</button><span class="hint">回复会注入到正在运行的 Hermes 会话</span><span id="msg"></span></div>
 <script>
@@ -355,9 +423,9 @@ def _write_turn_page(cfg: dict, turn_id: str, text: str, meta: dict) -> str:
     turns = spool.parent / "turns"
     page = (
         _TURN_HTML.replace("__ID__", html.escape(turn_id))
-        .replace("__BODY__", html.escape(text))
         .replace("__WHEN__", html.escape(time.strftime("%Y-%m-%d %H:%M")))
         .replace("__MODEL__", html.escape(str(meta.get("model") or "")))
+        .replace("__BODY__", _render_markdown(text))  # 放最后：正文里的占位符字符串不再被二次替换
     )
     try:
         _write_atomic(turns / f"{turn_id}.html", page)
@@ -557,15 +625,33 @@ def _start_reply_poller(cfg: dict) -> None:
 # Hook
 # ---------------------------------------------------------------------------
 
+_PREVIEW_STRIP = (
+    (re.compile(r"^\s*\|?[\s:|-]{3,}\|?\s*$", re.M), ""),   # 表格分隔行 |---|---|
+    (re.compile(r"\s*\|\s*"), " "),                        # 表格竖线
+    (re.compile(r"```[^\n]*\n"), ""),          # 代码围栏行
+    (re.compile(r"`([^`]*)`"), r"\1"),         # 行内代码
+    (re.compile(r"\*\*([^*]+)\*\*"), r"\1"),   # 粗体
+    (re.compile(r"(?<!\*)\*([^*\n]+)\*(?!\*)"), r"\1"),
+    (re.compile(r"\[([^\]]+)\]\([^)]*\)"), r"\1"),  # 链接留文字
+    (re.compile(r"^#{1,6}\s+", re.M), ""),     # 标题井号
+    (re.compile(r"^\s*[-*+]\s+", re.M), ""),   # 列表符号
+    (re.compile(r"^\s*>\s?", re.M), ""),       # 引用
+    (re.compile(r"\n{2,}"), " "),
+)
+
+
 def _preview(text: str, limit: int) -> str:
-    body = text
+    body = text.strip()
     if body.startswith("```"):
         nl = body.find("\n")
         body = body[nl + 1:] if nl != -1 else body
-    body = body[:limit]
-    if len(text) > limit:
-        body += "…"
-    return body
+    for pat, repl in _PREVIEW_STRIP:
+        body = pat.sub(repl, body)
+    body = re.sub(r"\s+", " ", body).strip()
+    cut = body[:limit]
+    if len(body) > limit:
+        cut += "…"
+    return cut
 
 
 def _on_post_llm_call(

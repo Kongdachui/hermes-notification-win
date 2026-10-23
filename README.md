@@ -10,7 +10,7 @@ Hermes Agent 的 Windows 通知插件（WSL 跑 Hermes，通知弹在 Windows �
 | 能力 | 说明 |
 |---|---|
 | **完成通知 + 就地回复** | 一轮回复结束后弹横幅：标题 + 80 字预览 + 输入框。打字点「发送」，内容作为用户消息注入当前会话，Hermes 接着干 |
-| **点开看全文** | 点横幅正文 → 浏览器打开这一轮的完整回复（本地 `127.0.0.1:9117`），页面底部也能回复 |
+| **点开看全文** | 点横幅正文 → 浏览器打开这一轮的完整回复（本地 `127.0.0.1:9117`），**Markdown 渲染**（标题/表格/代码块/引用/列表/链接），页面底部也能回复 |
 | **审批按钮** | 危险命令不再只在终端里问：横幅上直接给「允许一次 / 允许本会话 / 永远允许 / 拒绝」 |
 
 ## 怎么工作的
@@ -62,6 +62,17 @@ PYTHONPATH=~/.hermes/hermes-agent ~/.hermes/hermes-agent/venv/bin/python -c "
 from pathlib import Path; from gateway.control_socket import reload_gateway_plugins
 print(reload_gateway_plugins(Path.home()/'.hermes'))"
 ```
+
+## Markdown 渲染
+
+回复页在**服务端**渲染成 HTML，不引 CDN（墙内也能正常显示）：
+
+1. `markdown-it-py`（CommonMark + 表格 + 删除线）—— Hermes 的 venv 里本来就有（rich 的依赖），零额外安装
+2. 没有就退到 `python-markdown`（`fenced_code` / `tables` / `sane_lists`）
+3. 两个都没有 → 纯文本 `<pre>`，功能不中断
+
+原始 HTML 会被转义（`html: False`），LLM 输出里的 `<script>` 之类不会执行。
+通知横幅里的预览会先去掉 markdown 符号（`**`、反引号、表格竖线等），只留纯文字。
 
 ## 配置
 
