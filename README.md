@@ -112,4 +112,6 @@ rm -rf ~/.hermes/plugins/hermes-notification-win
 ## License
 
 MIT。见 [LICENSE](LICENSE)。
-上游 [itgoyo/hermes-notification](https://github.com/itgoyo/hermes-notification) 亦为 MIT。
+
+致谢：本项目的插件骨架与配置项源自 [itgoyo/hermes-notification](https://github.com/itgoyo/hermes-notification)（MIT，macOS 版）；
+toast 的输入框与按钮回调由 [win11toast](https://github.com/GitHub30/win11toast)（MIT）提供。
